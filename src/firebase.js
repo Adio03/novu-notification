@@ -1,6 +1,5 @@
 import { initializeApp } from "firebase/app";
 import { getMessaging, getToken, onMessage } from "firebase/messaging";
-import { getAnalytics } from "firebase/analytics";
 
 const firebaseConfig = {
     apiKey:            "AIzaSyAP2vkQB_rMz4vBgoN_aNbPEL5H7BtS91c",
@@ -12,44 +11,45 @@ const firebaseConfig = {
     measurementId:     "G-26GM08RB18"
 };
 
-// Initialize Firebase
 const app       = initializeApp(firebaseConfig);
-const analytics = getAnalytics(app);
 const messaging = getMessaging(app);
 
-/**
- * Requests browser notification permission, gets the real FCM token
- * for this browser/device, and registers it with your backend.
- *
- * Call this on app load or after login.
- *
- * @param {string} subscriberId — e.g. "BUS-J872IVFJ7HH5U1IK20KA6"
- * @param {string} jwtToken     — user's JWT for backend auth
- */
 export async function registerPushToken(subscriberId, jwtToken) {
     try {
-        // 1. Ask browser for notification permission
+        console.log("Registering push token for:", subscriberId);
+
+        // 1. Request permission
         const permission = await Notification.requestPermission();
         if (permission !== "granted") {
-            console.warn("Notification permission denied by user.");
+            console.warn("Notification permission denied.");
             return;
         }
+        console.log(" Notification permission granted.");
 
-        // 2. Get real FCM token for this browser using your VAPID key
+        // 2. Register service worker
+        const swReg = await navigator.serviceWorker.register("/firebase-messaging-sw.js", { scope: "/" });
+
+        // 3. Wait until fully active
+        await waitForServiceWorkerActive(swReg);
+        console.log("Service Worker active.");
+
+        // 4. Get FCM token — correct VAPID key from recital-notification Firebase project
         const fcmToken = await getToken(messaging, {
-            vapidKey: "BBLh53iniDnUyBJ89lGFK86Jc_9lRnUEzhTNj-wY6yFEVZqWbTM8rf2hIB-QOECmQQqS6XCp2yUVcEROv7TLz9U"
+            vapidKey:                  "BBoTWIz-pk7IHEC953bKhWZY41TtJ5ZX2E3Y3vrFB2wsFpg2Oge5ZswEhD9YUqU0U3F5EnZcZwWhxtt4BX50gEw",
+            serviceWorkerRegistration: swReg
         });
 
         if (!fcmToken) {
-            console.warn("No FCM token received — check VAPID key and Firebase config.");
+            console.error("❌ No FCM token — check VAPID key.");
             return;
         }
 
-        console.log("✅ FCM Token obtained:", fcmToken);
+        console.log("✅ FCM Token:", fcmToken);
+        localStorage.setItem("fcmToken", fcmToken);
 
-        // 3. Send token to your backend → NovuSubscriberService stores it in Novu
-        const response = await fetch("http://localhost:8080/api/notifications/fcm-token", {
-            method: "POST",
+        // 5. Auto-POST to backend
+        const res = await fetch("http://localhost:801/api/notifications/fcm-token", {
+            method:  "POST",
             headers: {
                 "Content-Type":  "application/json",
                 "Authorization": `Bearer ${jwtToken}`
@@ -57,28 +57,50 @@ export async function registerPushToken(subscriberId, jwtToken) {
             body: JSON.stringify({ subscriberId, fcmToken })
         });
 
-        if (response.ok) {
-            console.log("✅ FCM token registered with backend — push notifications active.");
+        if (res.ok) {
+            console.log("✅ FCM token registered with backend — push active.");
         } else {
-            console.error("❌ Backend FCM registration failed:", await response.text());
+            console.error("❌ Backend failed:", res.status, await res.text());
         }
 
-    } catch (error) {
-        console.error("Error registering FCM push token:", error);
+    } catch (err) {
+        console.error("❌ registerPushToken error:", err.message);
     }
 }
 
-/**
- * Listens for push notifications while the app tab is open (foreground).
- * Background notifications are handled by firebase-messaging-sw.js.
- *
- * @param {function} onReceived — callback with the notification payload
- */
-export function onForegroundMessage(onReceived) {
-    onMessage(messaging, (payload) => {
-        console.log("Foreground push received:", payload);
-        onReceived(payload);
+function waitForServiceWorkerActive(registration) {
+    return new Promise((resolve) => {
+        if (registration.active) {
+            resolve();
+            return;
+        }
+        const sw = registration.installing || registration.waiting;
+        if (!sw) { resolve(); return; }
+        sw.addEventListener("statechange", function handler(e) {
+            if (e.target.state === "activated") {
+                sw.removeEventListener("statechange", handler);
+                resolve();
+            }
+        });
     });
 }
 
-export { app, analytics, messaging };
+export function onForegroundMessage(callback) {
+    onMessage(messaging, (payload) => {
+        console.log("🔔 Foreground push:", JSON.stringify(payload, null, 2));
+
+        const title = payload.notification?.title
+            || payload.data?.title
+            || payload.data?.subject
+            || "New Notification";
+
+        const body  = payload.notification?.body
+            || payload.data?.body
+            || payload.data?.message
+            || "";
+
+        callback({ ...payload, title, body });
+    });
+}
+
+export { app, messaging };
