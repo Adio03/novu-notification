@@ -1,7 +1,6 @@
 import React, { useState, useEffect } from "react";
 import { Inbox } from "@novu/react";
 import { registerPushToken, onForegroundMessage } from "./firebase";
-import Select from 'react-select';
 
 const APP_IDENTIFIER = "P2IfsvF9QVrf";
 const BACKEND_URL    = "http://localhost:801";
@@ -455,6 +454,18 @@ const styles = {
   modalOverlay:  { position: "fixed", top: 0, left: 0, right: 0, bottom: 0, backgroundColor: "rgba(0,0,0,0.5)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000 },
   modalContent:  { background: "#fff", borderRadius: "12px", padding: "24px", width: "100%", maxWidth: "500px", maxHeight: "80vh", overflowY: "auto", boxShadow: "0 8px 32px rgba(0,0,0,0.1)" },
   modalTitle:    { fontSize: "1.25rem", fontWeight: 700, margin: "0 0 16px", color: "#18181b" },
+
+  // Table and Column styles
+  tablesContainer: { display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(140px, 1fr))", gap: "10px", marginTop: "8px" },
+  tableCard: { padding: "12px", borderRadius: "8px", border: "2px solid #e4e4e7", cursor: "pointer", transition: "all 0.2s", backgroundColor: "#f9fafb", textAlign: "center" },
+  tableCardSelected: { borderColor: "#10b981", backgroundColor: "#ecfdf5", boxShadow: "0 0 0 3px rgba(16, 185, 129, 0.1)" },
+  tableName: { fontWeight: 600, fontSize: "0.9rem", color: "#18181b", marginBottom: "4px", wordBreak: "break-word" },
+  columnCount: { fontSize: "0.75rem", color: "#71717a" },
+  columnsContainer: { display: "flex", flexDirection: "column", gap: "8px", marginTop: "12px", padding: "12px", backgroundColor: "#f9fafb", borderRadius: "8px", maxHeight: "250px", overflowY: "auto", border: "1px solid #e4e4e7" },
+  checkboxLabel: { display: "flex", alignItems: "center", gap: "8px", cursor: "pointer", fontSize: "0.9rem", color: "#52525b", padding: "6px 8px", borderRadius: "4px", transition: "background-color 0.15s" },
+  checkbox: { width: "18px", height: "18px", cursor: "pointer", accentColor: "#10b981" },
+  checkboxText: { flex: 1, wordBreak: "break-word" },
+  selectedInfo: { marginTop: "8px", fontSize: "0.85rem", color: "#16a34a", fontWeight: 500, padding: "8px 12px", backgroundColor: "#ecfdf5", borderRadius: "6px", border: "1px solid #d1fae5" },
 };
 
 const styleSheet = document.createElement("style");
@@ -474,10 +485,10 @@ function DatabaseModal({ onClose, auth, setBanner }) {
 
   const [loading, setLoading] = useState(false);
   const [tables, setTables] = useState([]);
-  const [selectedTables, setSelectedTables] = useState([]);
+  const [selectedTable, setSelectedTable] = useState(null);
+  const [selectedColumns, setSelectedColumns] = useState([]);
   const [error, setError] = useState("");
 
-  const buildJdbcUrl = () => `jdbc:${form.databaseType}://${form.host}:${form.port}/${form.databaseName}`;
 
   const handleTestConnection = async () => {
     if (!form.host || !form.databaseName || !form.username) {
@@ -519,7 +530,14 @@ function DatabaseModal({ onClose, auth, setBanner }) {
       console.log("Response data:", data);
 
       if (data.success) {
-        setTables(data.data || []);
+        // Convert object format to array format: { tableName: [...columns] } -> [{ name, columns }]
+        const formattedTables = Object.entries(data.data || {}).map(([tableName, columns]) => ({
+          name: tableName,
+          columns: Array.isArray(columns) ? columns : []
+        }));
+        setTables(formattedTables);
+        setSelectedTable(null);
+        setSelectedColumns([]);
         setBanner({ type: "success", message: data.message || "Connection successful" });
       } else {
         setError(data.message || "Connection failed");
@@ -532,9 +550,22 @@ function DatabaseModal({ onClose, auth, setBanner }) {
     }
   };
 
+  const handleTableSelect = (tableName) => {
+    setSelectedTable(tableName);
+    setSelectedColumns([]);
+  };
+
+  const handleColumnToggle = (columnName) => {
+    setSelectedColumns(prev =>
+      prev.includes(columnName)
+        ? prev.filter(c => c !== columnName)
+        : [...prev, columnName]
+    );
+  };
+
   const handleSave = async () => {
-    if (selectedTables.length === 0) {
-      setError("Please select at least one table.");
+    if (!selectedTable || selectedColumns.length === 0) {
+      setError("Please select a table and at least one column.");
       return;
     }
     setLoading(true);
@@ -548,27 +579,35 @@ function DatabaseModal({ onClose, auth, setBanner }) {
           Authorization: `Bearer ${auth.jwt}`
         },
         body: JSON.stringify({
-          databaseType: form.databaseType,
-          host: buildJdbcUrl(),
-          port: form.port,
-          databaseName: form.databaseName,
-          username: form.username,
-          password: form.password,
-          businessID: SUBSCRIBER_ID,
-          selectedTables
+          connectionDetails: {
+            databaseType: form.databaseType,
+            host: form.host,
+            port: form.port,
+            databaseName: form.databaseName,
+            username: form.username,
+            password: form.password,
+            businessID: SUBSCRIBER_ID,
+            createdBy: auth.email
+          },
+          selection: {
+            tableName: selectedTable,
+            selectedColumns: selectedColumns
+          }
         })
       });
 
-      if (!res.ok) throw new Error("Failed to save connection");
+      console.log("Save response status:", res.status);
       const data = await res.json();
+      console.log("Save response data:", data);
 
       if (data.success) {
-        setBanner({ type: "success", message: "Connection saved successfully" });
+        setBanner({ type: "success", message: data.message || "Connection saved successfully" });
         onClose();
       } else {
         setError(data.message || "Save failed");
       }
     } catch (err) {
+      console.error("Save error:", err);
       setError(err.message || "Unable to save connection");
     } finally {
       setLoading(false);
@@ -646,22 +685,60 @@ function DatabaseModal({ onClose, auth, setBanner }) {
             {loading ? <Spinner /> : "Test Connection"}
           </button>
           {error && <div style={styles.errorBox}>{error}</div>}
+
+          {/* Tables Selection */}
           {tables.length > 0 && (
             <div style={styles.formGroup}>
-              <label style={styles.label}>Select Tables</label>
-              <Select
-                isMulti
-                options={tables.map(t => ({ value: t, label: t }))}
-                value={selectedTables.map(t => ({ value: t, label: t }))}
-                onChange={(selected) => setSelectedTables(selected.map(s => s.value))}
-                placeholder="Select tables..."
-              />
+              <label style={styles.label}>Select Table</label>
+              <div style={styles.tablesContainer}>
+                {tables.map((table) => (
+                  <div
+                    key={table.name}
+                    style={{
+                      ...styles.tableCard,
+                      ...(selectedTable === table.name ? styles.tableCardSelected : {})
+                    }}
+                    onClick={() => handleTableSelect(table.name)}
+                  >
+                    <div style={styles.tableName}>{table.name}</div>
+                    <div style={styles.columnCount}>{table.columns?.length || 0} columns</div>
+                  </div>
+                ))}
+              </div>
             </div>
           )}
+
+          {/* Columns Selection */}
+          {selectedTable && tables.find(t => t.name === selectedTable)?.columns && (
+            <div style={styles.formGroup}>
+              <label style={styles.label}>
+                Select Columns for "{selectedTable}"
+              </label>
+              <div style={styles.columnsContainer}>
+                {tables.find(t => t.name === selectedTable).columns.map((column) => (
+                  <label key={column} style={styles.checkboxLabel}>
+                    <input
+                      type="checkbox"
+                      checked={selectedColumns.includes(column)}
+                      onChange={() => handleColumnToggle(column)}
+                      style={styles.checkbox}
+                    />
+                    <span style={styles.checkboxText}>{column}</span>
+                  </label>
+                ))}
+              </div>
+              {selectedColumns.length > 0 && (
+                <div style={styles.selectedInfo}>
+                  ✓ {selectedColumns.length} column(s) selected
+                </div>
+              )}
+            </div>
+          )}
+
           <div style={styles.buttonGroup}>
             <button onClick={onClose} style={{ ...styles.button, backgroundColor: "#6b7280" }}>Cancel</button>
-            <button onClick={handleSave} disabled={tables.length === 0 || selectedTables.length === 0 || loading}
-                    style={{ ...styles.button, backgroundColor: "#10b981", opacity: (tables.length === 0 || selectedTables.length === 0) ? 0.5 : 1 }}>
+            <button onClick={handleSave} disabled={!selectedTable || selectedColumns.length === 0 || loading}
+                    style={{ ...styles.button, backgroundColor: "#10b981", opacity: (!selectedTable || selectedColumns.length === 0) ? 0.5 : 1 }}>
               Save
             </button>
           </div>
