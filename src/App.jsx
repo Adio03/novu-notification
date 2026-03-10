@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from "react";
 import { Inbox } from "@novu/react";
 import { registerPushToken, onForegroundMessage } from "./firebase";
+import Select from 'react-select';
 
 const APP_IDENTIFIER = "P2IfsvF9QVrf";
 const BACKEND_URL    = "http://localhost:801";
@@ -24,7 +25,7 @@ export default function App() {
 
     // FCM token generated automatically after login
     // Sends POST /api/notifications/fcm-token with real device token
-    registerPushToken(SUBSCRIBER_ID, auth.jwt).then(r => console.log("fcm token generated"));
+    registerPushToken(SUBSCRIBER_ID, auth.jwt).then(() => console.log("fcm token generated"));
 
     // Show banner when push arrives while tab is open (foreground)
     // Novu may send title/body in payload.notification OR payload.data
@@ -219,6 +220,8 @@ function LoginPage({ onLogin, setBanner, banner }) {
 }
 
 function HomePage({ setBanner, auth }) {
+  const [showModal, setShowModal] = useState(false);
+
   return (
       <section>
         <h2 style={styles.pageTitle}>Welcome back 👋</h2>
@@ -240,7 +243,11 @@ function HomePage({ setBanner, auth }) {
             <li>Ready to receive real-time and push notifications!</li>
           </ul>
         </div>
+        <div style={{ marginBottom: "24px" }}>
+          <button onClick={() => setShowModal(true)} style={{ ...styles.button, backgroundColor: "#10b981" }}>Connect Database</button>
+        </div>
         <PipelinesPanel setBanner={setBanner} auth={auth} />
+        {showModal && <DatabaseModal onClose={() => setShowModal(false)} auth={auth} setBanner={setBanner} />}
       </section>
   );
 }
@@ -443,8 +450,223 @@ const styles = {
   loginBtn:      { padding: "12px", borderRadius: "8px", border: "none", background: "#5566ff", color: "#fff", fontWeight: 700, fontSize: "1rem", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", marginTop: "8px" },
   loginNote:     { marginTop: "24px", padding: "12px", background: "#fffbeb", border: "1px solid #fde68a", borderRadius: "8px", fontSize: "0.8rem", color: "#92400e", lineHeight: 1.6 },
   errorBox:      { padding: "10px 14px", background: "#fee2e2", border: "1px solid #fca5a5", borderRadius: "8px", color: "#991b1b", fontSize: "0.875rem", marginBottom: "8px" },
+
+  // Modal styles
+  modalOverlay:  { position: "fixed", top: 0, left: 0, right: 0, bottom: 0, backgroundColor: "rgba(0,0,0,0.5)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000 },
+  modalContent:  { background: "#fff", borderRadius: "12px", padding: "24px", width: "100%", maxWidth: "500px", maxHeight: "80vh", overflowY: "auto", boxShadow: "0 8px 32px rgba(0,0,0,0.1)" },
+  modalTitle:    { fontSize: "1.25rem", fontWeight: 700, margin: "0 0 16px", color: "#18181b" },
 };
 
 const styleSheet = document.createElement("style");
 styleSheet.innerText = `@keyframes spin { to { transform: rotate(360deg); } }`;
 document.head.appendChild(styleSheet);
+
+
+function DatabaseModal({ onClose, auth, setBanner }) {
+  const [form, setForm] = useState({
+    databaseType: "postgresql",
+    host: "",
+    port: 5432,
+    databaseName: "",
+    username: "",
+    password: ""
+  });
+
+  const [loading, setLoading] = useState(false);
+  const [tables, setTables] = useState([]);
+  const [selectedTables, setSelectedTables] = useState([]);
+  const [error, setError] = useState("");
+
+  const buildJdbcUrl = () => `jdbc:${form.databaseType}://${form.host}:${form.port}/${form.databaseName}`;
+
+  const handleTestConnection = async () => {
+    if (!form.host || !form.databaseName || !form.username) {
+      setError("Please fill in all required fields.");
+      return;
+    }
+    setLoading(true);
+    setError("");
+
+    try {
+      console.log("Testing connection with:", {
+        databaseType: form.databaseType,
+        host: form.host,
+        port: form.port,
+        databaseName: form.databaseName,
+        username: form.username,
+        businessID: auth.subscriberId
+      });
+
+      const res = await fetch(`${BACKEND_URL}/database/connect`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${auth.jwt}`
+        },
+        body: JSON.stringify({
+          databaseType: form.databaseType,
+          host: form.host,
+          port: form.port,
+          databaseName: form.databaseName,
+          username: form.username,
+          password: form.password,
+          businessID: SUBSCRIBER_ID
+        })
+      });
+
+      console.log("Response status:", res.status);
+      const data = await res.json();
+      console.log("Response data:", data);
+
+      if (data.success) {
+        setTables(data.data || []);
+        setBanner({ type: "success", message: data.message || "Connection successful" });
+      } else {
+        setError(data.message || "Connection failed");
+      }
+    } catch (err) {
+      console.error("Connection error:", err);
+      setError(err.message || "Unable to test connection");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleSave = async () => {
+    if (selectedTables.length === 0) {
+      setError("Please select at least one table.");
+      return;
+    }
+    setLoading(true);
+    setError("");
+
+    try {
+      const res = await fetch(`${BACKEND_URL}/database/save`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${auth.jwt}`
+        },
+        body: JSON.stringify({
+          databaseType: form.databaseType,
+          host: buildJdbcUrl(),
+          port: form.port,
+          databaseName: form.databaseName,
+          username: form.username,
+          password: form.password,
+          businessID: SUBSCRIBER_ID,
+          selectedTables
+        })
+      });
+
+      if (!res.ok) throw new Error("Failed to save connection");
+      const data = await res.json();
+
+      if (data.success) {
+        setBanner({ type: "success", message: "Connection saved successfully" });
+        onClose();
+      } else {
+        setError(data.message || "Save failed");
+      }
+    } catch (err) {
+      setError(err.message || "Unable to save connection");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <div style={styles.modalOverlay} onClick={onClose}>
+      <div style={styles.modalContent} onClick={(e) => e.stopPropagation()}>
+        <h2 style={styles.modalTitle}>Connect External Database</h2>
+        <div style={styles.form}>
+          <div style={styles.formGroup}>
+            <label style={styles.label}>Database Type</label>
+            <select
+              value={form.databaseType}
+              onChange={(e) => setForm({ ...form, databaseType: e.target.value })}
+              style={styles.input}
+            >
+              <option value="postgresql">PostgreSQL</option>
+              <option value="mysql">MySQL</option>
+              <option value="mssql">SQL Server</option>
+            </select>
+          </div>
+          <div style={styles.formGroup}>
+            <label style={styles.label}>Host</label>
+            <input
+              type="text"
+              value={form.host}
+              onChange={(e) => setForm({ ...form, host: e.target.value })}
+              style={styles.input}
+              placeholder="e.g., localhost"
+            />
+          </div>
+          <div style={styles.formGroup}>
+            <label style={styles.label}>Port</label>
+            <input
+              type="number"
+              value={form.port}
+              onChange={(e) => setForm({ ...form, port: parseInt(e.target.value) })}
+              style={styles.input}
+            />
+          </div>
+          <div style={styles.formGroup}>
+            <label style={styles.label}>Database Name</label>
+            <input
+              type="text"
+              value={form.databaseName}
+              onChange={(e) => setForm({ ...form, databaseName: e.target.value })}
+              style={styles.input}
+              placeholder="e.g., mydb"
+            />
+          </div>
+          <div style={styles.formGroup}>
+            <label style={styles.label}>Username</label>
+            <input
+              type="text"
+              value={form.username}
+              onChange={(e) => setForm({ ...form, username: e.target.value })}
+              style={styles.input}
+              placeholder="e.g., postgres"
+            />
+          </div>
+          <div style={styles.formGroup}>
+            <label style={styles.label}>Password</label>
+            <input
+              type="password"
+              value={form.password}
+              onChange={(e) => setForm({ ...form, password: e.target.value })}
+              style={styles.input}
+              placeholder="••••••••"
+            />
+          </div>
+          <button onClick={handleTestConnection} disabled={loading}
+                  style={{ ...styles.button, backgroundColor: "#f59e0b" }}>
+            {loading ? <Spinner /> : "Test Connection"}
+          </button>
+          {error && <div style={styles.errorBox}>{error}</div>}
+          {tables.length > 0 && (
+            <div style={styles.formGroup}>
+              <label style={styles.label}>Select Tables</label>
+              <Select
+                isMulti
+                options={tables.map(t => ({ value: t, label: t }))}
+                value={selectedTables.map(t => ({ value: t, label: t }))}
+                onChange={(selected) => setSelectedTables(selected.map(s => s.value))}
+                placeholder="Select tables..."
+              />
+            </div>
+          )}
+          <div style={styles.buttonGroup}>
+            <button onClick={onClose} style={{ ...styles.button, backgroundColor: "#6b7280" }}>Cancel</button>
+            <button onClick={handleSave} disabled={tables.length === 0 || selectedTables.length === 0 || loading}
+                    style={{ ...styles.button, backgroundColor: "#10b981", opacity: (tables.length === 0 || selectedTables.length === 0) ? 0.5 : 1 }}>
+              Save
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
