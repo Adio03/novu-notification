@@ -11,6 +11,7 @@ const firebaseConfig = {
     measurementId:     "G-26GM08RB18"
 };
 
+
 const app       = initializeApp(firebaseConfig);
 const messaging = getMessaging(app);
 

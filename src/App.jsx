@@ -2,8 +2,8 @@ import React, { useState, useEffect } from "react";
 import { Inbox } from "@novu/react";
 import { registerPushToken, onForegroundMessage } from "./firebase";
 
-const APP_IDENTIFIER = "P2IfsvF9QVrf";
-const BACKEND_URL    = "http://localhost:801";
+const APP_IDENTIFIER = "cuWH5333g5IH";
+const BACKEND_URL    = "http://localhost:80";
 const SUBSCRIBER_ID   = "BUS-SVAIC212UZ03E6TM1GYMU";
 
 export default function App() {
@@ -555,12 +555,15 @@ function DatabaseModal({ onClose, auth, setBanner }) {
     setSelectedColumns([]);
   };
 
-  const handleColumnToggle = (columnName) => {
-    setSelectedColumns(prev =>
-      prev.includes(columnName)
-        ? prev.filter(c => c !== columnName)
-        : [...prev, columnName]
-    );
+  const handleColumnToggle = (column) => {
+    setSelectedColumns(prev => {
+      const exists = prev.some(c => c.name === column.name);
+      if (exists) {
+        return prev.filter(c => c.name !== column.name);
+      } else {
+        return [...prev, column];
+      }
+    });
   };
 
   const handleSave = async () => {
@@ -586,8 +589,7 @@ function DatabaseModal({ onClose, auth, setBanner }) {
             databaseName: form.databaseName,
             username: form.username,
             password: form.password,
-            businessID: SUBSCRIBER_ID,
-            createdBy: auth.email
+            businessID: SUBSCRIBER_ID
           },
           selection: {
             tableName: selectedTable,
@@ -716,14 +718,16 @@ function DatabaseModal({ onClose, auth, setBanner }) {
               </label>
               <div style={styles.columnsContainer}>
                 {tables.find(t => t.name === selectedTable).columns.map((column) => (
-                  <label key={column} style={styles.checkboxLabel}>
+                  <label key={column.name} style={styles.checkboxLabel}>
                     <input
                       type="checkbox"
-                      checked={selectedColumns.includes(column)}
+                      checked={selectedColumns.some(c => c.name === column.name)}
                       onChange={() => handleColumnToggle(column)}
                       style={styles.checkbox}
                     />
-                    <span style={styles.checkboxText}>{column}</span>
+                    <span style={styles.checkboxText}>
+                      {column.name} <span style={{ color: "#9ca3af", fontSize: "0.75rem" }}>({column.type})</span>
+                    </span>
                   </label>
                 ))}
               </div>
